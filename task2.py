@@ -1,207 +1,196 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
 
 
+# FIR filter design function
+Fs = 1000
+ecg = np.loadtxt("Noisy_ECG_1000Hz_39.dat")
+N_ecg = len(ecg)
+t = np.arange(N_ecg) / Fs
 
-def design_FIR(Fs, stopbands, transition_width=1.0):
 
-    # Check that the sampling frequency and transition width
-    # are valid.
+def design_FIR(Fs, stopbands, transition_width=2.0):
+
     if Fs <= 0 or transition_width <= 0:
-        raise ValueError("Sampling frequency and transition width must be positive.")
+        raise ValueError("Invalid sampling frequency or transition width")
 
-    nyquist = Fs / 2.0
+    nyquist = Fs / 2
 
-    # Check that all stopband frequency ranges are valid.
-    for band in stopbands:
-
-        low = band[0]
-        high = band[1]
-
+    for low, high in stopbands:
         if low < 0 or high <= low or high > nyquist:
-            raise ValueError("Invalid stopband frequency range.")
-
-
-  
+            raise ValueError("Invalid stopband")
 
     N = int(np.ceil(3.3 * Fs / transition_width))
 
     if N % 2 == 0:
         N += 1
 
-
-    filter_order = N - 1
-    group_delay = filter_order / 2
-
-    print("Number of coefficients:", N)
-    print("Filter order:", filter_order)
-    print("Group delay:", group_delay, "samples")
-
-
-
-    # Use an IFFT length significantly larger than the
-    # number of FIR coefficients to obtain a fine frequency grid.
-
     L = 1
-
     while L < 8 * N:
         L *= 2
 
-
-  
     H = np.ones(L)
-
 
     for k in range(L):
 
-        # Manually calculate the frequency corresponding to bin k.
-
         if k <= L // 2:
-            frequency = k * Fs / L
+            f = k * Fs / L
         else:
-            frequency = (k - L) * Fs / L
+            f = (k - L) * Fs / L
 
-        frequency = abs(frequency)
+        f = abs(f)
 
-        # Examine each specified stopband.
+        for low, high in stopbands:
 
-        for band in stopbands:
+            if low <= f <= high:
+                H[k] = 0
 
-            low = band[0]
-            high = band[1]
+            elif low > 0 and low - transition_width < f < low:
+                H[k] = min(
+                    H[k],
+                    0.5 * (1 + np.cos(
+                        np.pi * (f - low + transition_width)
+                        / transition_width
+                    ))
+                )
 
-            response = 1.0
+            elif high < f < high + transition_width:
+                H[k] = min(
+                    H[k],
+                    0.5 * (1 - np.cos(
+                        np.pi * (f - high)
+                        / transition_width
+                    ))
+                )
 
-            # Set the required stopband frequencies to zero.
-
-            if low <= frequency <= high:
-
-                response = 0.0
-
-            # Create a raised-cosine transition before the
-            # lower edge of a stopband.
-            # This is not needed when removing DC.
-
-            elif low > 0 and low - transition_width < frequency < low:
-
-                position = (frequency - (low - transition_width)) / transition_width
-
-                response = 0.5 * (1.0 + np.cos(np.pi * position))
-
-            # Create a raised-cosine transition after the
-            # upper edge of a stopband.
-
-            elif high < frequency < high + transition_width:
-
-                position = (frequency - high) / transition_width
-
-                response = 0.5 * (1.0 - np.cos(np.pi * position))
-
-            # If stopbands overlap, retain the lowest response.
-
-            H[k] = min(H[k], response)
-
-
-    impulse_response = np.real(np.fft.ifft(H))
-
-    # Centre the impulse response manually.
-    # This creates a symmetric, linear-phase FIR filter.
+    h = np.real(np.fft.ifft(H))
 
     coefficients = np.zeros(N)
-
     centre = N // 2
 
     for i in range(N):
-
         index = i - centre
-
         if index < 0:
-            index = L + index
+            index += L
+        coefficients[i] = h[index]
 
-        coefficients[i] = impulse_response[index]
-
-
-   
-    # A Hamming window reduces unwanted ripples caused by
-    # truncating the impulse response.
-
-    window = np.hamming(N)
-
-    for i in range(N):
-
-        coefficients[i] *= window[i]
-
-
-    # Return the calculated FIR coefficients.
+    coefficients *= np.hamming(N)
 
     return coefficients
 
 
 
-Fs = 1000
-
-
 stopbands = [
-
     (0, 0.5),
-
     (49, 51),
-
     (99, 101),
-
     (149, 151)
-
 ]
 
 
+# Design FIR coefficients
+
+transition_width = 2.0
 
 coefficients = design_FIR(
     Fs,
     stopbands,
-    transition_width=1.0
+    transition_width
 )
 
-print("\nFIR coefficients successfully calculated.")
+N = len(coefficients)
+
+print("Number of coefficients:", N)
+print("Filter order:", N - 1)
+print("Group delay:", (N - 1) // 2, "samples")
 
 
-plt.figure(figsize=(12, 4))
+# Calculate frequency response for verification
 
-plt.plot(coefficients)
+L = 1
 
-plt.title("FIR Filter Impulse Response")
-plt.xlabel("Coefficient Number")
-plt.ylabel("Amplitude")
+while L < 8 * N:
+    L *= 2
 
-plt.grid()
-plt.tight_layout()
-plt.show()
-
-
-
-frequency_response = np.fft.fft(coefficients, L)
-
-magnitude = np.abs(frequency_response)
+response = np.fft.fft(coefficients, L)
 
 frequencies = np.arange(L // 2 + 1) * Fs / L
 
-magnitude_db = 20 * np.log10(
-    magnitude[:L // 2 + 1] + 1e-12
-)
+magnitude = np.abs(response[:L // 2 + 1])
 
-# Plot the positive frequency response.
+magnitude_db = 20 * np.log10(magnitude + 1e-12)
 
-plt.figure(figsize=(12, 5))
 
-plt.plot(frequencies, magnitude_db)
+# Normalise the coefficients at 10 Hz
 
-plt.title("Designed FIR Filter Frequency Response")
-plt.xlabel("Frequency (Hz)")
-plt.ylabel("Magnitude (dB)")
+reference_index = int(round(10 * L / Fs))
 
-plt.xlim(0, Fs / 2)
-plt.ylim(-100, 10)
+gain = magnitude[reference_index]
 
-plt.grid()
+if gain > 1e-12:
+    coefficients /= gain
+
+
+# FIR filtering using an efficient circular buffer
+
+buffer = np.zeros(N)
+
+filtered_ecg = np.zeros(N_ecg)
+
+index = 0
+
+for n in range(N_ecg):
+
+    buffer[index] = ecg[n]
+
+    result = 0.0
+
+    result += np.dot(
+        coefficients[:index + 1],
+        buffer[index::-1]
+    )
+
+    if index < N - 1:
+        result += np.dot(
+            coefficients[index + 1:],
+            buffer[N - 1:index:-1]
+        )
+
+    filtered_ecg[n] = result
+
+    index += 1
+
+    if index == N:
+        index = 0
+
+fig, axes = plt.subplots(4, 1, figsize=(14, 14))
+
+display_samples = min(N_ecg, 10 * Fs)
+
+axes[0].plot(t[:display_samples], ecg[:display_samples], linewidth=0.8)
+axes[0].set_title("Original Noisy ECG")
+axes[0].set_xlabel("Time (s)")
+axes[0].set_ylabel("Amplitude")
+axes[0].grid(True)
+
+axes[1].plot(t[:display_samples], filtered_ecg[:display_samples], linewidth=0.8)
+axes[1].set_title("FIR Filtered ECG")
+axes[1].set_xlabel("Time (s)")
+axes[1].set_ylabel("Amplitude")
+axes[1].grid(True)
+
+axes[2].plot(np.arange(N), coefficients, linewidth=0.8)
+axes[2].set_title("FIR Filter Coefficients")
+axes[2].set_xlabel("Coefficient Index")
+axes[2].set_ylabel("Amplitude")
+axes[2].grid(True)
+
+axes[3].plot(frequencies, magnitude_db, linewidth=0.8)
+axes[3].set_title("FIR Frequency Response")
+axes[3].set_xlabel("Frequency (Hz)")
+axes[3].set_ylabel("Magnitude (dB)")
+axes[3].set_xlim(0, Fs / 2)
+axes[3].grid(True)
+
 plt.tight_layout()
 plt.show()
